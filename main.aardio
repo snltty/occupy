@@ -1,0 +1,181 @@
+import win.ui;
+/*DSG{{*/
+mainForm = win.form(text="端口占用查看器";right=604;bottom=531;border="thin";max=false;min=false)
+mainForm.add(
+button={cls="button";text="关闭选中进程";left=509;top=10;right=595;bottom=32;z=4};
+cbProcotol={cls="combobox";left=40;top=10;right=118;bottom=32;edge=1;items={};mode="dropdown";z=5};
+lbPort={cls="static";text="端口";left=125;top=10;right=151;bottom=32;transparent=1;z=6};
+lbProcotol={cls="static";text="协议";left=9;top=10;right=36;bottom=32;transparent=1;z=7};
+lbText={cls="static";text="其它文本";left=228;top=10;right=282;bottom=32;transparent=1;z=9};
+listview={cls="listview";left=9;top=44;right=596;bottom=525;cp=1;edge=1;vscroll=1;z=1};
+searchBtn={cls="button";text="搜索";left=379;top=10;right=439;bottom=32;z=3};
+tbPort={cls="edit";left=159;top=10;right=220;bottom=32;edge=1;z=2};
+tbText={cls="edit";left=284;top=10;right=371;bottom=32;edge=1;z=8}
+)
+/*}}*/
+
+//单例,只能运行一次
+import process.mutex;
+mutex=process.mutex("snltty.occupy")
+if( mutex.conflict ){
+      return ;
+}
+
+import dotNet;
+var compiler = dotNet.createCompiler("C#");
+compiler.Reference("System.dll");
+compiler.Reference("System.Diagnostics.Process.dll");
+compiler.Source = /******
+using System.Diagnostics; 
+using System;
+namespace CSharpLibrary  
+{  
+    public class Object  
+    {     
+        public string GetText(int id)
+        {   
+            try
+			{
+    			System.Diagnostics.Process porc = System.Diagnostics.Process.GetProcessById(id);
+    			string name = porc.MainWindowTitle;
+    			if (string.IsNullOrWhiteSpace(name))
+    			{
+        			name = porc.ProcessName;
+    			}
+    			return name;
+			}
+			catch (Exception)
+			{
+			}
+			return string.Empty;
+        }
+    }   
+} 
+******/
+
+var assembly = compiler.CompileOrFail();
+assembly.import("CSharpLibrary");
+mainForm.netObj = CSharpLibrary.Object();
+
+
+mainForm.dataTable = {};
+mainForm.selectedData = {};
+mainForm.fields = {"Type";"LocalEndPoint";"RemoteEndPoint";"State";"Pid";"Name"};
+mainForm.sortColumn = 0;
+mainForm.sortDesc = true;
+mainForm.loading = false;
+mainForm.cbProcotol.items = {'全部','TCP','UDP'};
+mainForm.cbProcotol.selText = '全部';
+
+import win.ui.grid;
+mainForm.grid = win.ui.grid(mainForm.listview);
+mainForm.grid.setColumns({"协议";"本地端口";"远程端口";"状态";"Pid";"进程"},{40,120,120,80,50,150});
+mainForm.grid.onSelChanged = function(selected,item,subItem,nmListView){
+	if(selected){
+		mainForm.selectedData = mainForm.dataTable[item];
+	}
+}
+mainForm.grid.onSortColumn = function(column,desc){
+	mainForm.sortColumn = column;
+	mainForm.sortDesc = desc;
+	if(mainForm.sortColumn > 0){
+		field = mainForm.fields[mainForm.sortColumn];
+		table.sort(mainForm.dataTable,function(next){
+			if(mainForm.sortDesc){
+				return owner[field] > next[field];
+			}	
+			return owner[field] < next[field]
+		});
+	}
+	mainForm.grid.setTable(mainForm.dataTable);
+	return true;
+}
+mainForm.searchFunction = function(){
+	import thread;
+	if(mainForm.loading === true) return;
+	//thread.invoke( 
+		//function(mainForm){
+			import process.popen;
+			import preg;
+			import console;
+			
+			mainForm.loading = true;
+			text = mainForm.searchBtn.text;
+			mainForm.searchBtn.text = "正在搜索";
+			
+			var cmd = "netstat -aon";
+			if(mainForm.cbProcotol.selText != '全部'){
+				cmd = cmd+`|findstr "`+mainForm.cbProcotol.selText+`"`;
+			}
+			if(string.len(mainForm.tbPort.text) > 0){
+				cmd = cmd+`|findstr ":`+mainForm.tbPort.text+` "`;
+			}
+			if(string.len(mainForm.tbText.text) > 0){
+				cmd = cmd+`|findstr "`+mainForm.tbText.text+`"`;
+			}
+			var proc = process.popen.cmd(cmd);
+			var strLineArr = string.split(proc.readAll(),'<\r\n>');
+			
+			var tableData = {
+				fields = mainForm.fields
+			};
+			
+			var index = 1;
+			var regex = preg("\s{2,}");
+			for(k,v in strLineArr){
+				newV,count = regex.replace(v,' ');
+				newV = string.split(newV,' ');
+				if(newV[2]=="TCP" || newV[2] == "UDP"){
+					
+					tableData[index] = {
+						"Type"=newV[2];
+						"Name"="";
+						"State"=newV[2]=="TCP" ? newV[5] : "";
+						"Pid"= newV[2]=="TCP" ? newV[6] : newV[5];
+						"LocalEndPoint"=newV[3];
+						"RemoteEndPoint"=newV[4]
+					};
+					try{
+						var pid = tonumber(tableData[index]["Pid"]);
+						tableData[index]["Name"] = mainForm.netObj.GetText(pid);
+					}catch(e){
+						console.log(e);
+					}
+					index++;
+				}
+			}
+			if(mainForm.sortColumn > 0){
+				field = mainForm.fields[mainForm.sortColumn];
+				table.sort(tableData,function(next){
+					if(mainForm.sortDesc){
+						return owner[field] > next[field];
+					}	
+					return owner[field] < next[field]
+				});
+			}
+ 			mainForm.dataTable = tableData;
+			mainForm.grid.setTable(tableData);
+			
+			mainForm.loading = false;
+			mainForm.searchBtn.text = text;
+		//},mainForm
+	//)
+}
+mainForm.searchBtn.oncommand = function(id,event){
+	mainForm.searchFunction();
+}
+mainForm.button.oncommand = function(id,event){
+	import process;
+	if(mainForm.selectedData && mainForm.selectedData.Pid){
+		process.kill(tonumber(selectedData.Pid));
+		mainForm.searchFunction();
+	}
+}
+mainForm.cbProcotol.onListChange = function(){ 	
+	mainForm.searchFunction();
+}
+
+mainForm.show();
+mainForm.searchFunction();
+
+return win.loopMessage();
